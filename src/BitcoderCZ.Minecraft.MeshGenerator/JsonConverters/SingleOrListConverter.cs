@@ -1,7 +1,7 @@
 using System.Text.Json;
 using System.Text.Json.Serialization;
 
-namespace BitcoderCZ.Minecraft.MeshGenerator.Utils;
+namespace BitcoderCZ.Minecraft.MeshGenerator.JsonConverters;
 
 internal sealed class SingleOrListConverter<T> : JsonConverter<List<T>>
 {

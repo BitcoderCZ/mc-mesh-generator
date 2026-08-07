@@ -4,7 +4,7 @@ using System.Text.Json;
 using System.Text.Json.Serialization;
 using MPSBuffer = BitcoderCZ.Buffers.ImmutableInlineArray<BitcoderCZ.Buffers.FixedArray1<string>, string>;
 using System.Diagnostics;
-using BitcoderCZ.Minecraft.MeshGenerator.Utils;
+using BitcoderCZ.Minecraft.MeshGenerator.JsonConverters;
 
 namespace BitcoderCZ.Minecraft.MeshGenerator.Models.ResourcePacks;
 
