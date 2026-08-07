@@ -54,6 +54,23 @@ public sealed class BlockMeshGenerator
         return mesh.Drain();
     }
 
+    /// <summary>
+    /// Generates a mesh for the given block model.
+    /// </summary>
+    /// <param name="blockModel">The block model, e.g. minecraft:block/acacia_button.</param>
+    /// <returns>The generated mesh.</returns>
+    public MeshData GenerateBlockModel(string blockModel)
+    {
+        var mesh = new MeshData.Builder();
+
+        GenerateBlockMesh(new VariantModel()
+        {
+            Model = blockModel,
+        }, mesh);
+
+        return mesh.Drain();
+    }
+
     private void GenerateBlockMesh(VariantModel modelVariant, MeshData.Builder mesh)
     {
         var model = _resourcePack.GetBlockModel(modelVariant.Model);
