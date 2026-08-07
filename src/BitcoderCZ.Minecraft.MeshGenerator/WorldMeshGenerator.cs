@@ -311,14 +311,14 @@ public sealed class WorldMeshGenerator
     {
         var model = _resourcePack.GetBlockModel(modelVariant.Model);
 
-        var variantTransform = CreateVariantTransform(modelVariant);
+        var variantTransform = GeneratorUtils.CreateVariantTransform(modelVariant);
 
         foreach (var element in model.Elements)
         {
             var from = element.From * BlockModelScale;
             var to = element.To * BlockModelScale;
 
-            var elementTransform = CreateElementTransform(element.Rotation);
+            var elementTransform = GeneratorUtils.CreateElementTransform(element.Rotation, BlockModelScale);
             var finalTransform = elementTransform * variantTransform;
 
             for (var i = 0; i < 6; i++)
@@ -335,11 +335,11 @@ public sealed class WorldMeshGenerator
                 if (face.CullFace.HasValue)
                 {
                     // Rotate the defined cull direction based on the variant's transform
-                    var cullNormal = GetDirectionVector3(face.CullFace.Value);
+                    var cullNormal = GeneratorUtils.GetDirectionVector3(face.CullFace.Value);
                     var rotatedNormal = Vector3.TransformNormal(cullNormal, variantTransform);
-                    var actualCullDir = GetClosestDirection(rotatedNormal);
+                    var actualCullDir = GeneratorUtils.GetClosestDirection(rotatedNormal);
 
-                    var neighborPos = blockPosition + GetDirectionOffset(actualCullDir);
+                    var neighborPos = blockPosition + GeneratorUtils.GetDirectionOffset(actualCullDir);
 
                     var neighbor = getBlockAtPos(neighborPos, ref state);
                     if (neighbor is not null)
@@ -363,245 +363,9 @@ public sealed class WorldMeshGenerator
 
                 var primitive = mesh.GetPrimitive(actualTexture);
 
-                BuildFace(blockPosition, direction, from, to, face, finalTransform, modelVariant.UVLock, primitive);
+                GeneratorUtils.BuildFace(blockPosition, direction, from, to, face, finalTransform, modelVariant.UVLock, primitive, BlockModelScale);
             }
         }
-    }
-
-    private static void BuildFace(Vector3 blockPosition, Direction dir, Vector3 from, Vector3 to, BlockFace face, Matrix4x4 transform, bool uvLock, MeshPrimitive.Builder primitive)
-    {
-        var startIndex = primitive.VertexCount;
-
-        Span<Vector3> corners = stackalloc Vector3[4];
-        GetFaceVertices(dir, from, to, corners, out var normal);
-
-        Span<Vector2> uvs = stackalloc Vector2[4];
-        CalculateUVs(face.UV, face.Rotation, uvs);
-
-        for (var i = 0; i < 4; i++)
-        {
-            var pos = blockPosition + Vector3.Transform(corners[i], transform);
-
-            var norm = Vector3.Normalize(Vector3.TransformNormal(normal, transform));
-
-            primitive.AddVertex(new MeshVertex(pos, norm, uvs[i]/*, face.TintIndex*/));
-        }
-
-        primitive.AddIndex(startIndex + 0);
-        primitive.AddIndex(startIndex + 1);
-        primitive.AddIndex(startIndex + 2);
-        primitive.AddIndex(startIndex + 2);
-        primitive.AddIndex(startIndex + 3);
-        primitive.AddIndex(startIndex + 0);
-    }
-
-    private static Matrix4x4 CreateElementTransform(BlockElementRotation? rot)
-    {
-        if (!rot.HasValue)
-        {
-            return Matrix4x4.Identity;
-        }
-
-        var r = rot.Value;
-        var origin = r.Origin * BlockModelScale;
-
-        // deg to rad
-        var radX = r.X * (float.Pi / 180f);
-        var radY = r.Y * (float.Pi / 180f);
-        var radZ = r.Z * (float.Pi / 180f);
-
-        var matrix = Matrix4x4.Identity;
-
-        // Move to Origin
-        matrix *= Matrix4x4.CreateTranslation(-origin);
-
-        // Rotate
-        matrix *= CreateMinecraftRotation(r.X, r.Y, r.Z);
-
-        if (r.ReScale)
-        {
-            var scaleX = r.X != 0 ? 1f / float.Cos(radX) : 1f;
-            var scaleY = r.Y != 0 ? 1f / float.Cos(radY) : 1f;
-            var scaleZ = r.Z != 0 ? 1f / float.Cos(radZ) : 1f;
-            matrix *= Matrix4x4.CreateScale(scaleX, scaleY, scaleZ);
-        }
-
-        // Move back from Origin
-        matrix *= Matrix4x4.CreateTranslation(origin);
-
-        return matrix;
-    }
-
-    private static Matrix4x4 CreateVariantTransform(VariantModel variant)
-    {
-        if (variant is { RotationX: 0, RotationY: 0, RotationZ: 0 })
-        {
-            return Matrix4x4.Identity;
-        }
-
-        var center = new Vector3(0.5f, 0.5f, 0.5f);
-
-        return Matrix4x4.CreateTranslation(-center)
-             * CreateMinecraftRotation(variant.RotationX, variant.RotationY, variant.RotationZ)
-             * Matrix4x4.CreateTranslation(center);
-    }
-
-    private static Matrix4x4 CreateMinecraftRotation(float degreesX, float degreesY, float degreesZ)
-    {
-        var radX = degreesX * (float.Pi / 180f);
-        var radY = -degreesY * (float.Pi / 180f);
-        var radZ = degreesZ * (float.Pi / 180f);
-
-        return Matrix4x4.CreateRotationY(radY)
-            * Matrix4x4.CreateRotationX(radX)
-            * Matrix4x4.CreateRotationZ(radZ);
-    }
-
-    private static void GetFaceVertices(Direction dir, Vector3 from, Vector3 to, Span<Vector3> corners, out Vector3 normal)
-    {
-        Debug.Assert(corners.Length is 4);
-
-        // Z may need to be flipped
-        switch (dir)
-        {
-            case Direction.Up: // +Y
-                normal = Vector3.UnitY;
-                corners[0] = new Vector3(from.X, to.Y, from.Z);
-                corners[1] = new Vector3(from.X, to.Y, to.Z);
-                corners[2] = new Vector3(to.X, to.Y, to.Z);
-                corners[3] = new Vector3(to.X, to.Y, from.Z);
-                break;
-            case Direction.Down: // -Y
-                normal = -Vector3.UnitY;
-                corners[0] = new Vector3(from.X, from.Y, to.Z);
-                corners[1] = new Vector3(from.X, from.Y, from.Z);
-                corners[2] = new Vector3(to.X, from.Y, from.Z);
-                corners[3] = new Vector3(to.X, from.Y, to.Z);
-                break;
-            case Direction.East: // +X
-                normal = Vector3.UnitX;
-                corners[0] = new Vector3(to.X, to.Y, to.Z);
-                corners[1] = new Vector3(to.X, from.Y, to.Z);
-                corners[2] = new Vector3(to.X, from.Y, from.Z);
-                corners[3] = new Vector3(to.X, to.Y, from.Z);
-                break;
-            case Direction.West: // -X
-                normal = -Vector3.UnitX;
-                corners[0] = new Vector3(from.X, to.Y, from.Z);
-                corners[1] = new Vector3(from.X, from.Y, from.Z);
-                corners[2] = new Vector3(from.X, from.Y, to.Z);
-                corners[3] = new Vector3(from.X, to.Y, to.Z);
-                break;
-            case Direction.North: // -Z
-                normal = -Vector3.UnitZ;
-                corners[0] = new Vector3(to.X, to.Y, from.Z);
-                corners[1] = new Vector3(to.X, from.Y, from.Z);
-                corners[2] = new Vector3(from.X, from.Y, from.Z);
-                corners[3] = new Vector3(from.X, to.Y, from.Z);
-                break;
-            case Direction.South: // +Z
-                normal = Vector3.UnitZ;
-                corners[0] = new Vector3(from.X, to.Y, to.Z);
-                corners[1] = new Vector3(from.X, from.Y, to.Z);
-                corners[2] = new Vector3(to.X, from.Y, to.Z);
-                corners[3] = new Vector3(to.X, to.Y, to.Z);
-                break;
-            default:
-                normal = Vector3.Zero;
-                break;
-        }
-    }
-
-    private static void CalculateUVs(UVCoordinates uv, int rotation, Span<Vector2> result)
-    {
-        Debug.Assert(result.Length is 4);
-
-        // Scale 0-16 to 0-1.
-        var u0 = uv.Min.X * BlockModelScale;
-        var v0 = uv.Min.Y * BlockModelScale;
-        var u1 = uv.Max.X * BlockModelScale;
-        var v1 = uv.Max.Y * BlockModelScale;
-
-        // top-left, bottom-left, bottom-right, top-right
-        result[0] = new Vector2(u0, v0);
-        result[1] = new Vector2(u0, v1);
-        result[2] = new Vector2(u1, v1);
-        result[3] = new Vector2(u1, v0);
-
-        // If rotation is applied (90, 180, 270), shift the array
-        if (rotation != 0)
-        {
-            var shifts = rotation / 90 % 4;
-            if (shifts is 1)
-            {
-                var tmp = result[0];
-                result[0] = result[1];
-                result[1] = result[2];
-                result[2] = result[3];
-                result[3] = tmp;
-            }
-            else if (shifts is 2)
-            {
-                var tmp0 = result[0];
-                var tmp1 = result[1];
-                result[0] = result[2];
-                result[1] = result[3];
-                result[2] = tmp0;
-                result[3] = tmp1;
-            }
-            else if (shifts is 3)
-            {
-                var tmp = result[3];
-                result[3] = result[2];
-                result[2] = result[1];
-                result[1] = result[0];
-                result[0] = tmp;
-            }
-        }
-    }
-
-    private static int3 GetDirectionOffset(Direction dir)
-        => dir switch
-        {
-            Direction.East => new int3(1, 0, 0),
-            Direction.West => new int3(-1, 0, 0),
-            Direction.Up => new int3(0, 1, 0),
-            Direction.Down => new int3(0, -1, 0),
-            Direction.South => new int3(0, 0, 1),
-            Direction.North => new int3(0, 0, -1),
-            _ => int3.Zero
-        };
-
-    private static Vector3 GetDirectionVector3(Direction dir)
-        => dir switch
-        {
-            Direction.East => Vector3.UnitX,
-            Direction.West => -Vector3.UnitX,
-            Direction.Up => Vector3.UnitY,
-            Direction.Down => -Vector3.UnitY,
-            Direction.South => Vector3.UnitZ,
-            Direction.North => -Vector3.UnitZ,
-            _ => Vector3.Zero
-        };
-
-    private static Direction GetClosestDirection(Vector3 normal)
-    {
-        normal = Vector3.Normalize(normal);
-        var maxDot = -2f; // init lower than any possible dot product (-1 to 1)
-        var closest = Direction.Up;
-
-        for (var i = 0; i < 6; i++)
-        {
-            var dir = (Direction)i;
-            var dot = Vector3.Dot(normal, GetDirectionVector3(dir));
-            if (dot > maxDot)
-            {
-                maxDot = dot;
-                closest = dir;
-            }
-        }
-
-        return closest;
     }
 
     private bool IsBlockFullAndOpaque(BlockState blockState, Direction faceDirection)
@@ -629,7 +393,7 @@ public sealed class WorldMeshGenerator
         Span<bool> faceGrid = stackalloc bool[16 * 16];
         faceGrid.Clear();
 
-        var normal = GetDirectionVector3(faceDirection);
+        var normal = GeneratorUtils.GetDirectionVector3(faceDirection);
 
         foreach (var modelVariant in modelVariants)
         {
@@ -639,14 +403,14 @@ public sealed class WorldMeshGenerator
                 continue;
             }
 
-            var variantTransform = CreateVariantTransform(modelVariant);
+            var variantTransform = GeneratorUtils.CreateVariantTransform(modelVariant);
 
             foreach (var element in model.Elements)
             {
                 var from = element.From * BlockModelScale;
                 var to = element.To * BlockModelScale;
 
-                var elementTransform = CreateElementTransform(element.Rotation);
+                var elementTransform = GeneratorUtils.CreateElementTransform(element.Rotation, BlockModelScale);
                 var finalTransform = elementTransform * variantTransform;
 
                 CalculateTransformedAABB(from, to, finalTransform, out var min, out var max);
