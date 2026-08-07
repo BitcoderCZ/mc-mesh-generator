@@ -1,0 +1,31 @@
+﻿<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <IsAotCompatible>true</IsAotCompatible>
+    <GeneratePackageOnBuild>True</GeneratePackageOnBuild>
+    <GenerateDocumentationFile>True</GenerateDocumentationFile>
+
+    <Version>1.0.0</Version>
+    <PackageId>BitcoderCZ.Minecraft.MeshGenerator</PackageId>
+    <PackageTags>library;minecraft</PackageTags>
+    <Description>Generate mesh from a minecraft world.</Description>
+    <PackageReadmeFile>README.md</PackageReadmeFile>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <InternalsVisibleTo Include="BitcoderCZ.Minecraft.MeshGenerator.Gltf" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <None Include="../../README.md" Pack="true" PackagePath="/" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="BitcoderCZ.Buffers" />
+    <PackageReference Include="BitcoderCZ.Maths" />
+    <PackageReference Include="BitcoderCZ.Utils" />
+    <PackageReference Include="Cyotek.Data.Nbt" />
+    <PackageReference Include="SixLabors.ImageSharp" />
+  </ItemGroup>
+
+</Project>

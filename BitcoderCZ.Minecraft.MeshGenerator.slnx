@@ -1,0 +1,6 @@
+<Solution>
+  <Folder Name="/src/">
+    <Project Path="src/BitcoderCZ.Minecraft.MeshGenerator.Gltf/BitcoderCZ.Minecraft.MeshGenerator.Gltf.csproj" />
+  </Folder>
+  <Project Path="src/BitcoderCZ.Minecraft.MeshGenerator/BitcoderCZ.Minecraft.MeshGenerator.csproj" />
+</Solution>

@@ -1,0 +1,22 @@
+﻿<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <GeneratePackageOnBuild>True</GeneratePackageOnBuild>
+    <GenerateDocumentationFile>True</GenerateDocumentationFile>
+
+    <Version>1.0.0</Version>
+    <PackageId>BitcoderCZ.Minecraft.MeshGenerator.Gltf</PackageId>
+    <PackageTags>library;minecraft</PackageTags>
+    <Description>Convert MeshData to GLTF.</Description>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="SharpGLTF.Core" />
+    <PackageReference Include="SharpGLTF.Toolkit" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="../BitcoderCZ.Minecraft.MeshGenerator/BitcoderCZ.Minecraft.MeshGenerator.csproj" />
+  </ItemGroup>
+
+</Project>
