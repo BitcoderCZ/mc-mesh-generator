@@ -1,3 +1,4 @@
+using System.Collections;
 using System.Collections.Concurrent;
 using System.Globalization;
 using BitcoderCZ.Minecraft.MeshGenerator.Models.ResourcePacks;
@@ -8,7 +9,7 @@ namespace BitcoderCZ.Minecraft.MeshGenerator;
 /// <summary>
 /// Manages multiple <see cref="ResourcePack"/>s.
 /// </summary>
-public sealed class ResourcePackManager : IDisposable
+public sealed class ResourcePackManager : IReadOnlyList<ResourcePack>, IDisposable
 {
     private readonly ResourcePack[] _packs;
 
@@ -24,7 +25,20 @@ public sealed class ResourcePackManager : IDisposable
     /// <summary>
     /// Gets the number of resource packs loaded in the <see cref="ResourcePackManager"/>.
     /// </summary>
+    [Obsolete($"Use {nameof(Count)} instead.", error: false)]
     public int LoadedPackCount => _packs.Length;
+
+    /// <summary>
+    /// Gets the number of resource packs loaded in the <see cref="ResourcePackManager"/>.
+    /// </summary>
+    public int Count => _packs.Length;
+
+    /// <summary>
+    /// Gets a resource pack at the specified index.
+    /// </summary>
+    /// <param name="index">Index of the resource pack.</param>
+    /// <returns>Resource pack at <paramref name="index"/>.</returns>
+    public ResourcePack this[int index] => _packs[index];
 
     /// <summary>
     /// Loads the extracted resource packs from a directory.
@@ -62,7 +76,6 @@ public sealed class ResourcePackManager : IDisposable
         var packs = new ResourcePack[packsToLoad.Count];
 
         // Load in reverse (from base to highest priority custom)
-        // This allows custom packs to reference block models from base packs.
         for (var i = packsToLoad.Count - 1; i >= 0; i--)
         {
             var packDef = packsToLoad[packsToLoad.Count - 1 - i];
@@ -81,13 +94,6 @@ public sealed class ResourcePackManager : IDisposable
             }
 
             var packName = packDef.Name.Trim();
-
-            var index = packName.LastIndexOf(' ');
-
-            if (index != -1)
-            {
-                packName = packName[(index + 1)..];
-            }
 
             packs[i] = await ResourcePack.LoadFromDirectoryAsync(packName, packDef.Directory, FallbackResolver, cancellationToken);
         }
@@ -196,6 +202,13 @@ public sealed class ResourcePackManager : IDisposable
 
         throw new FileNotFoundException($"Colormap texture '{name}' not found in any loaded resource pack.");
     }
+
+    /// <inheritdoc/>
+    public IEnumerator<ResourcePack> GetEnumerator()
+        => ((IEnumerable<ResourcePack>)_packs).GetEnumerator();
+
+    IEnumerator IEnumerable.GetEnumerator()
+        => GetEnumerator();
 
     /// <inheritdoc/>
     public void Dispose()

@@ -26,9 +26,7 @@ namespace BitcoderCZ.Minecraft.MeshGenerator;
 /// </summary>
 public sealed class ResourcePack
 {
-    private readonly string _namePrefix;
     private readonly DirectoryInfo _rootDir;
-    private readonly DirectoryInfo _texturesDir;
 
     private readonly FrozenDictionary<string, BlockModel> _blockModels;
     private readonly FrozenDictionary<string, HashSet<string>> _variantPropertySchema;
@@ -38,13 +36,11 @@ public sealed class ResourcePack
     private ResourcePack(string name, DirectoryInfo rootDir, FrozenDictionary<string, BlockModel> blockModels, FrozenDictionary<string, HashSet<string>> variantPropertySchema, FrozenDictionary<BlockState, (BSVBuffer Buffer, int TotalWeight)> blockStatesVariant, FrozenDictionary<string, ImmutableArray<MultipartCase>> blockStatesMultipart)
     {
         Name = name;
-        _namePrefix = $"{Name}:";
+        _rootDir = rootDir;
         _blockModels = blockModels;
         _variantPropertySchema = variantPropertySchema;
         _blockStatesVariant = blockStatesVariant;
         _blockStatesMultipart = blockStatesMultipart;
-        _rootDir = rootDir;
-        _texturesDir = new DirectoryInfo(Path.Combine(_rootDir.FullName, "textures"));
     }
 
     /// <summary>
@@ -62,21 +58,134 @@ public sealed class ResourcePack
     /// <returns>The task object representing the asynchronous operation.</returns>
     public static async Task<ResourcePack> LoadFromDirectoryAsync(string packName, DirectoryInfo rootDirectory, Func<string, BlockModel?>? fallbackResolver = null, CancellationToken cancellationToken = default)
     {
-        var blockModelsDir = new DirectoryInfo(Path.Combine(rootDirectory.FullName, "models", "block"));
         var blockModelsJson = new Dictionary<string, BlockModelJson>(StringComparer.Ordinal);
+        Dictionary<BlockState, (BSVBuffer Buffer, int TotalWeight)> blockStatesVariant = [];
+        Dictionary<string, ImmutableArray<MultipartCase>> blockStatesMultipart = [];
 
-        if (blockModelsDir.Exists)
+        var assetsDir = new DirectoryInfo(Path.Combine(rootDirectory.FullName, "assets"));
+
+        if (assetsDir.Exists)
         {
-            foreach (var file in blockModelsDir.EnumerateFiles())
+            // Iterate over all namespaces found in the assets folder
+            foreach (var namespaceDir in assetsDir.EnumerateDirectories())
             {
-                var modelName = Path.GetFileNameWithoutExtension(file.Name);
-                BlockModelJson model;
-                using (var fs = File.OpenRead(file.FullName))
+                var @namespace = namespaceDir.Name;
+
+                var blockModelsDir = new DirectoryInfo(Path.Combine(namespaceDir.FullName, "models", "block"));
+                if (blockModelsDir.Exists)
                 {
-                    model = await JsonSerializer.DeserializeAsync(fs, AppJsonContext.Default.BlockModelJson, cancellationToken) ?? new();
+                    foreach (var file in blockModelsDir.EnumerateFiles("*.json"))
+                    {
+                        var modelName = Path.GetFileNameWithoutExtension(file.Name);
+                        BlockModelJson model;
+                        using (var fs = File.OpenRead(file.FullName))
+                        {
+                            model = await JsonSerializer.DeserializeAsync(fs, AppJsonContext.Default.BlockModelJson, cancellationToken) ?? new();
+                        }
+
+                        blockModelsJson.Add($"{@namespace}:block/{modelName}", model);
+                    }
                 }
 
-                blockModelsJson.Add($"{packName}:block/{modelName}", model);
+                var blockStatesDir = new DirectoryInfo(Path.Combine(namespaceDir.FullName, "blockstates"));
+                if (blockStatesDir.Exists)
+                {
+                    foreach (var file in blockStatesDir.EnumerateFiles("*.json"))
+                    {
+                        var blockName = $"{@namespace}:{Path.GetFileNameWithoutExtension(file.Name)}";
+                        BlockStateJson json;
+                        using (var fs = File.OpenRead(file.FullName))
+                        {
+                            json = await JsonSerializer.DeserializeAsync(fs, AppJsonContext.Default.BlockStateJson, cancellationToken) ?? new();
+                        }
+
+                        if (json.Variants is not null)
+                        {
+                            foreach (var variant in json.Variants)
+                            {
+                                var props = ParseVariantString(variant.Key);
+                                var state = BlockState.CreateNoCopy(blockName, props);
+
+                                var totalWeight = 0;
+                                foreach (var item in variant.Value)
+                                {
+                                    totalWeight += item.Weight;
+                                }
+
+                                blockStatesVariant[state] = (ImmutableInlineArray.Create<BSVBufferArray, VariantModel>(variant.Value), totalWeight);
+                            }
+                        }
+                        else if (json.Multipart is not null)
+                        {
+                            var builder = ImmutableArray.CreateBuilder<MultipartCase>(json.Multipart.Length);
+                            foreach (var @case in json.Multipart)
+                            {
+                                var totalWeight = 0;
+                                foreach (var item in @case.Apply)
+                                {
+                                    totalWeight += item.Weight;
+                                }
+
+                                ImmutableArray<ImmutableArray<KeyValuePair<string, MPSBuffer>>> conditions = default;
+                                if (@case.When is { } when)
+                                {
+                                    if (when.And is not null)
+                                    {
+                                        var conditionsBuilder = ImmutableArray.CreateBuilder<KeyValuePair<string, MPSBuffer>>(when.And.Count);
+                                        foreach (var list in when.And)
+                                        {
+                                            foreach (var item in list)
+                                            {
+                                                conditionsBuilder.Add(new(item.Key, CreateMultiPartState(item.Value)));
+                                            }
+                                        }
+
+                                        conditions = [conditionsBuilder.DrainToImmutable()];
+                                    }
+                                    else if (when.Or is not null)
+                                    {
+                                        var conditionsBuilder = ImmutableArray.CreateBuilder<ImmutableArray<KeyValuePair<string, MPSBuffer>>>(when.Or.Count);
+                                        var innerConditionsBuilder = ImmutableArray.CreateBuilder<KeyValuePair<string, MPSBuffer>>(4);
+
+                                        foreach (var list in when.Or)
+                                        {
+                                            foreach (var item in list)
+                                            {
+                                                innerConditionsBuilder.Add(new(item.Key, CreateMultiPartState(item.Value)));
+                                            }
+
+                                            conditionsBuilder.Add(innerConditionsBuilder.DrainToImmutable());
+                                        }
+
+                                        conditions = conditionsBuilder.DrainToImmutable();
+                                    }
+                                    else if (when.Properties is not null)
+                                    {
+                                        var conditionsBuilder = ImmutableArray.CreateBuilder<KeyValuePair<string, MPSBuffer>>(when.Properties.Count);
+                                        foreach (var item in when.Properties)
+                                        {
+                                            conditionsBuilder.Add(new(item.Key, CreateMultiPartState(item.Value.GetString() ?? "")));
+                                        }
+
+                                        conditions = [conditionsBuilder.DrainToImmutable()];
+                                    }
+                                }
+
+                                builder.Add(new MultipartCase()
+                                {
+                                    When = new MultipartCaseCondition()
+                                    {
+                                        Conditions = conditions,
+                                    },
+                                    Apply = @case.Apply,
+                                    TotalWeight = totalWeight,
+                                });
+                            }
+
+                            blockStatesMultipart[blockName] = builder.DrainToImmutable();
+                        }
+                    }
+                }
             }
         }
 
@@ -84,112 +193,6 @@ public sealed class ResourcePack
         foreach (var (modelName, _) in blockModelsJson)
         {
             ResolveBlockModel(modelName);
-        }
-
-        var blockStatesDir = new DirectoryInfo(Path.Combine(rootDirectory.FullName, "blockstates"));
-        Dictionary<BlockState, (BSVBuffer Buffer, int TotalWeight)> blockStatesVariant = [];
-        Dictionary<string, ImmutableArray<MultipartCase>> blockStatesMultipart = [];
-        if (blockStatesDir.Exists)
-        {
-            foreach (var file in blockStatesDir.EnumerateFiles())
-            {
-                var blockName = $"{packName}:{Path.GetFileNameWithoutExtension(file.Name)}";
-                BlockStateJson json;
-                using (var fs = File.OpenRead(file.FullName))
-                {
-                    json = await JsonSerializer.DeserializeAsync(fs, AppJsonContext.Default.BlockStateJson, cancellationToken) ?? new();
-                }
-
-                if (json.Variants is not null)
-                {
-                    foreach (var variant in json.Variants)
-                    {
-                        var props = ParseVariantString(variant.Key);
-                        var state = BlockState.CreateNoCopy(blockName, props);
-
-                        var totalWeight = 0;
-                        foreach (var item in variant.Value)
-                        {
-                            totalWeight += item.Weight;
-                        }
-
-                        blockStatesVariant[state] = (ImmutableInlineArray.Create<BSVBufferArray, VariantModel>(variant.Value), totalWeight);
-                    }
-                }
-                else if (json.Multipart is not null)
-                {
-                    var builder = ImmutableArray.CreateBuilder<MultipartCase>(json.Multipart.Length);
-                    foreach (var @case in json.Multipart)
-                    {
-                        var totalWeight = 0;
-                        foreach (var item in @case.Apply)
-                        {
-                            totalWeight += item.Weight;
-                        }
-
-                        // Or<And<State>>
-                        //public ImmutableArray<ImmutableArray<KeyValuePair<string, MPSBuffer>>> Conditions { get; init; }
-                        ImmutableArray<ImmutableArray<KeyValuePair<string, MPSBuffer>>> conditions = default;
-                        if (@case.When is { } when)
-                        {
-                            if (when.And is not null)
-                            {
-                                var conditionsBuilder = ImmutableArray.CreateBuilder<KeyValuePair<string, MPSBuffer>>(when.And.Count);
-
-                                foreach (var list in when.And)
-                                {
-                                    foreach (var item in list)
-                                    {
-                                        conditionsBuilder.Add(new(item.Key, CreateMultiPartState(item.Value)));
-                                    }
-                                }
-
-                                conditions = [conditionsBuilder.DrainToImmutable()];
-                            }
-                            else if (when.Or is not null)
-                            {
-                                var conditionsBuilder = ImmutableArray.CreateBuilder<ImmutableArray<KeyValuePair<string, MPSBuffer>>>(when.Or.Count);
-                                var innerConditionsBuilder = ImmutableArray.CreateBuilder<KeyValuePair<string, MPSBuffer>>(4);
-
-                                foreach (var list in when.Or)
-                                {
-                                    foreach (var item in list)
-                                    {
-                                        innerConditionsBuilder.Add(new(item.Key, CreateMultiPartState(item.Value)));
-                                    }
-
-                                    conditionsBuilder.Add(innerConditionsBuilder.DrainToImmutable());
-                                }
-
-                                conditions = conditionsBuilder.DrainToImmutable();
-                            }
-                            else if (when.Properties is not null)
-                            {
-                                var conditionsBuilder = ImmutableArray.CreateBuilder<KeyValuePair<string, MPSBuffer>>(when.Properties.Count);
-
-                                foreach (var item in when.Properties)
-                                {
-                                    conditionsBuilder.Add(new(item.Key, CreateMultiPartState(item.Value.GetString() ?? "")));
-                                }
-
-                                conditions = [conditionsBuilder.DrainToImmutable()];
-                            }
-                        }
-
-                        builder.Add(new MultipartCase()
-                        {
-                            When = new MultipartCaseCondition()
-                            {
-                                Conditions = conditions,
-                            },
-                            Apply = @case.Apply,
-                            TotalWeight = totalWeight,
-                        });
-                    }
-
-                    blockStatesMultipart[blockName] = builder.DrainToImmutable();
-                }
-            }
         }
 
         Dictionary<string, HashSet<string>> variantPropertySchema = new(blockStatesVariant.Count, StringComparer.Ordinal);
@@ -213,7 +216,7 @@ public sealed class ResourcePack
 
         BlockModel? ResolveBlockModel(string modelName)
         {
-            var normalizedName = NormalizeModelName(packName, modelName);
+            var normalizedName = NormalizeModelName(modelName);
 
             if (blockModels.TryGetValue(normalizedName, out var existingModel))
             {
@@ -237,14 +240,7 @@ public sealed class ResourcePack
             ImmutableArray<BlockElement> elements;
             if (json.Elements is null)
             {
-                if (parent?.Elements is null)
-                {
-                    elements = [];
-                }
-                else
-                {
-                    elements = parent.Elements;
-                }
+                elements = parent?.Elements ?? [];
             }
             else
             {
@@ -414,18 +410,12 @@ public sealed class ResourcePack
     {
         ThrowHelper.ThrowIfLessThan(result.Length, 1);
 
-        if (!blockState.BlockId.StartsWith(_namePrefix, StringComparison.Ordinal))
-        {
-            return 0;
-        }
-
         // way more variant blocks, so try variant first
         if (_variantPropertySchema.TryGetValue(blockState.BlockId, out var propertySchema))
         {
             if (blockState.PropertyCount == propertySchema.Count && _blockStatesVariant.TryGetValue(blockState, out var variant))
             {
                 var (variants, totalWeight) = variant;
-
                 result[0] = PickRandomVariant(variants, totalWeight, rng);
                 return 1;
             }
@@ -433,7 +423,6 @@ public sealed class ResourcePack
             if (propertySchema.Count is 0 && _blockStatesVariant.TryGetValue(new BlockState(blockState.BlockId), out variant))
             {
                 var (variants, totalWeight) = variant;
-
                 result[0] = PickRandomVariant(variants, totalWeight, rng);
                 return 1;
             }
@@ -451,8 +440,8 @@ public sealed class ResourcePack
             if (_blockStatesVariant.TryGetValue(BlockState.CreateNoCopy(blockState.BlockId, propertiesArray, propertiesArrayLength), out variant))
             {
                 var (variants, totalWeight) = variant;
-
                 result[0] = PickRandomVariant(variants, totalWeight, rng);
+                ArrayPool<KeyValuePair<string, string>>.Shared.Return(propertiesArray);
                 return 1;
             }
 
@@ -584,7 +573,7 @@ public sealed class ResourcePack
             return true;
         }
 
-        return _blockModels.TryGetValue(NormalizeModelName(Name, modelName), out model);
+        return _blockModels.TryGetValue(NormalizeModelName(modelName), out model);
     }
 
     /// <summary>
@@ -615,12 +604,19 @@ public sealed class ResourcePack
     /// <returns>The task object representing the asynchronous operation.</returns>
     public async Task<byte[]?> TryGetTextureDataAsync(string name, CancellationToken cancellationToken = default)
     {
-        if (name.StartsWith(_namePrefix, StringComparison.Ordinal))
+        // Extract namespace from texture, defaulting to "minecraft"
+        var @namespace = "minecraft";
+        var path = name;
+
+        var colonIdx = name.IndexOf(':');
+        if (colonIdx >= 0)
         {
-            name = name[_namePrefix.Length..];
+            @namespace = name[..colonIdx];
+            path = name[(colonIdx + 1)..];
         }
 
-        var file = Path.Combine(_texturesDir.FullName, name);
+        var file = Path.Combine(_rootDir.FullName, "assets", @namespace, "textures", path);
+
         if (!Path.HasExtension(file))
         {
             file += ".png";
@@ -739,9 +735,9 @@ public sealed class ResourcePack
         return result;
     }
 
-    private static string NormalizeModelName(string packName, string modelName)
+    private static string NormalizeModelName(string modelName)
     {
-        var @namespace = packName;
+        var @namespace = "minecraft";
         var path = modelName;
 
         var colonIdx = modelName.IndexOf(':');
