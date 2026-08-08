@@ -28,7 +28,7 @@ public sealed class ResourcePack
 {
     private readonly DirectoryInfo _rootDir;
 
-    private readonly FrozenDictionary<string, BlockModel> _blockModels;
+    private readonly FrozenDictionary<string, BlockModel> _models;
     private readonly FrozenDictionary<string, HashSet<string>> _variantPropertySchema;
     private readonly FrozenDictionary<BlockState, (BSVBuffer Buffer, int TotalWeight)> _blockStatesVariant;
     private readonly FrozenDictionary<string, ImmutableArray<MultipartCase>> _blockStatesMultipart;
@@ -37,7 +37,7 @@ public sealed class ResourcePack
     {
         Name = name;
         _rootDir = rootDir;
-        _blockModels = blockModels;
+        _models = blockModels;
         _variantPropertySchema = variantPropertySchema;
         _blockStatesVariant = blockStatesVariant;
         _blockStatesMultipart = blockStatesMultipart;
@@ -58,7 +58,7 @@ public sealed class ResourcePack
     /// <returns>The task object representing the asynchronous operation.</returns>
     public static async Task<ResourcePack> LoadFromDirectoryAsync(string packName, DirectoryInfo rootDirectory, Func<string, BlockModel?>? fallbackResolver = null, CancellationToken cancellationToken = default)
     {
-        var blockModelsJson = new Dictionary<string, BlockModelJson>(StringComparer.Ordinal);
+        var modelsJson = new Dictionary<string, BlockModelJson>(StringComparer.Ordinal);
         Dictionary<BlockState, (BSVBuffer Buffer, int TotalWeight)> blockStatesVariant = [];
         Dictionary<string, ImmutableArray<MultipartCase>> blockStatesMultipart = [];
 
@@ -71,19 +71,23 @@ public sealed class ResourcePack
             {
                 var @namespace = namespaceDir.Name;
 
-                var blockModelsDir = new DirectoryInfo(Path.Combine(namespaceDir.FullName, "models", "block"));
-                if (blockModelsDir.Exists)
+                var modelsDir = new DirectoryInfo(Path.Combine(namespaceDir.FullName, "models"));
+                if (modelsDir.Exists)
                 {
-                    foreach (var file in blockModelsDir.EnumerateFiles("*.json"))
+                    foreach (var subDir in modelsDir.EnumerateDirectories("*", SearchOption.TopDirectoryOnly))
                     {
-                        var modelName = Path.GetFileNameWithoutExtension(file.Name);
-                        BlockModelJson model;
-                        using (var fs = File.OpenRead(file.FullName))
+                        var dirName = Path.GetFileName(subDir.Name);
+                        foreach (var file in subDir.EnumerateFiles("*.json"))
                         {
-                            model = await JsonSerializer.DeserializeAsync(fs, AppJsonContext.Default.BlockModelJson, cancellationToken) ?? new();
-                        }
+                            var modelName = Path.GetFileNameWithoutExtension(file.Name);
+                            BlockModelJson model;
+                            using (var fs = File.OpenRead(file.FullName))
+                            {
+                                model = await JsonSerializer.DeserializeAsync(fs, AppJsonContext.Default.BlockModelJson, cancellationToken) ?? new();
+                            }
 
-                        blockModelsJson.Add($"{@namespace}:block/{modelName}", model);
+                            modelsJson.Add($"{@namespace}:{dirName}/{modelName}", model);
+                        }
                     }
                 }
 
@@ -189,10 +193,10 @@ public sealed class ResourcePack
             }
         }
 
-        var blockModels = new Dictionary<string, BlockModel>(blockModelsJson.Count, StringComparer.Ordinal);
-        foreach (var (modelName, _) in blockModelsJson)
+        var models = new Dictionary<string, BlockModel>(modelsJson.Count, StringComparer.Ordinal);
+        foreach (var (modelName, _) in modelsJson)
         {
-            ResolveBlockModel(modelName);
+            ResolveModel(modelName);
         }
 
         Dictionary<string, HashSet<string>> variantPropertySchema = new(blockStatesVariant.Count, StringComparer.Ordinal);
@@ -212,18 +216,18 @@ public sealed class ResourcePack
             variantPropertySchema.Add(item.Key.BlockId, propertyNames);
         }
 
-        return new ResourcePack(packName, rootDirectory, blockModels.ToFrozenDictionary(), variantPropertySchema.ToFrozenDictionary(), blockStatesVariant.ToFrozenDictionary(), blockStatesMultipart.ToFrozenDictionary());
+        return new ResourcePack(packName, rootDirectory, models.ToFrozenDictionary(), variantPropertySchema.ToFrozenDictionary(), blockStatesVariant.ToFrozenDictionary(), blockStatesMultipart.ToFrozenDictionary());
 
-        BlockModel? ResolveBlockModel(string modelName)
+        BlockModel? ResolveModel(string modelName)
         {
             var normalizedName = NormalizeModelName(modelName);
 
-            if (blockModels.TryGetValue(normalizedName, out var existingModel))
+            if (models.TryGetValue(normalizedName, out var existingModel))
             {
                 return existingModel;
             }
 
-            if (!blockModelsJson.TryGetValue(normalizedName, out var json))
+            if (!modelsJson.TryGetValue(normalizedName, out var json))
             {
                 if (fallbackResolver is not null)
                 {
@@ -233,7 +237,7 @@ public sealed class ResourcePack
                 return null;
             }
 
-            var parent = json.Parent is null ? null : ResolveBlockModel(json.Parent);
+            var parent = json.Parent is null ? null : ResolveModel(json.Parent);
 
             var textures = MergeDictionaries(json.Textures, parent?.Textures);
 
@@ -299,12 +303,20 @@ public sealed class ResourcePack
 
             var model = new BlockModel()
             {
+                BuiltInInfo = parent is not null
+                    ? parent.BuiltInInfo
+                    : json.Parent switch
+                    {
+                        "builtin/generated" => BuiltInBlockModel.Generated,
+                        "builtin/entity" => BuiltInBlockModel.Entity,
+                        _ => BuiltInBlockModel.None,
+                    },
                 Display = MergeDictionaries(json.Display, parent?.Display),
                 Textures = textures,
                 Elements = elements,
             };
 
-            blockModels[normalizedName] = model;
+            models[normalizedName] = model;
 
             return model;
         }
@@ -550,9 +562,9 @@ public sealed class ResourcePack
     /// <param name="modelName">Name of the model.</param>
     /// <returns>The <see cref="BlockModel"/>.</returns>
     /// <exception cref="KeyNotFoundException">Thrown when the model does not exist in the resource pack.</exception>
-    public BlockModel GetBlockModel(string modelName)
+    public BlockModel GetModel(string modelName)
     {
-        if (TryGetBlockModel(modelName, out var model))
+        if (TryGetModel(modelName, out var model))
         {
             return model;
         }
@@ -565,15 +577,15 @@ public sealed class ResourcePack
     /// </summary>
     /// <param name="modelName">Name of the model.</param>
     /// <param name="model">The <see cref="BlockModel"/>.</param>
-    /// <returns><see langword="true"/> if the resource pack contains an block model with the specified name; otherwise, <see langword="false"/>.</returns>
-    public bool TryGetBlockModel(string modelName, [NotNullWhen(true)] out BlockModel? model)
+    /// <returns><see langword="true"/> if the resource pack contains a model with the specified name; otherwise, <see langword="false"/>.</returns>
+    public bool TryGetModel(string modelName, [NotNullWhen(true)] out BlockModel? model)
     {
-        if (_blockModels.TryGetValue(modelName, out model))
+        if (_models.TryGetValue(modelName, out model))
         {
             return true;
         }
 
-        return _blockModels.TryGetValue(NormalizeModelName(modelName), out model);
+        return _models.TryGetValue(NormalizeModelName(modelName), out model);
     }
 
     /// <summary>

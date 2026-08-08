@@ -1,16 +1,19 @@
+using System.Collections.Concurrent;
 using System.Collections.Frozen;
 using System.Numerics;
 using SharpGLTF.Geometry;
 using SharpGLTF.Geometry.VertexTypes;
 using SharpGLTF.Materials;
 using SharpGLTF.Scenes;
+using SixLabors.ImageSharp;
+using SixLabors.ImageSharp.PixelFormats;
 
 namespace BitcoderCZ.Minecraft.MeshGenerator.Gltf;
 
 /// <summary>
 /// Convert <see cref="MeshData"/> to gltf.
 /// </summary>
-public static class GltfConverter
+public sealed class GltfConverter : IDisposable
 {
     private static readonly FrozenDictionary<string, string> TextureToColormap = new Dictionary<string, string>(StringComparer.Ordinal)
     {
@@ -41,14 +44,30 @@ public static class GltfConverter
         { "minecraft:block/attached_melon_stem", HexToVector4(0xFFFF00) },
     }.ToFrozenDictionary();
 
+    private readonly ResourcePackManager _resourcePackManager;
+    private readonly ConcurrentDictionary<string, Image<Rgba32>> _textureImageCache = new(StringComparer.Ordinal);
+    private bool _disposed;
+
+    /// <summary>
+    /// Initializes a new instance of the <see cref="GltfConverter"/> class.
+    /// </summary>
+    /// <param name="resourcePackManager">The <see cref="ResourcePackManager"/> used to get textures.</param>
+    public GltfConverter(ResourcePackManager resourcePackManager)
+    {
+        ArgumentNullException.ThrowIfNull(resourcePackManager);
+
+        _resourcePackManager = resourcePackManager;
+    }
+
     /// <summary>
     /// Converts the <see cref="MeshData"/> to gltf.
     /// </summary>
     /// <param name="mesh">The <see cref="MeshData"/> to convert.</param>
-    /// <param name="resourcePack">The <see cref="ResourcePackManager"/> used to get textures.</param>
     /// <returns>The task object representing the asynchronous operation.</returns>
-    public static async Task<SharpGLTF.Schema2.ModelRoot> ConvertAsync(MeshData mesh, ResourcePackManager resourcePack)
+    public async Task<SharpGLTF.Schema2.ModelRoot> ConvertAsync(MeshData mesh)
     {
+        ObjectDisposedException.ThrowIf(_disposed, this);
+
         var meshBuilder = new MeshBuilder<VertexPositionNormal, VertexTexture1, VertexEmpty>("ExportedMesh");
 
         var biome = new Biome("forest", 0.7f, 0.8f);
@@ -58,9 +77,9 @@ public static class GltfConverter
             var textureId = kvp.Key;
             var primitiveData = kvp.Value;
 
-            var textureBytes = await resourcePack.GetTextureDataAsync(textureId);
+            var textureBytes = await _resourcePackManager.GetTextureDataAsync(textureId);
 
-            var colorMultiplier = await TryGetColorMultiplierAsync(textureId, biome, resourcePack);
+            var colorMultiplier = await TryGetColorMultiplierAsync(textureId, biome);
 
             var material = new MaterialBuilder(textureId)
                 .WithBaseColor(new SharpGLTF.Memory.MemoryImage(textureBytes), colorMultiplier)
@@ -93,6 +112,24 @@ public static class GltfConverter
         return sceneBuilder.ToGltf2();
     }
 
+    /// <inheritdoc/>
+    public void Dispose()
+    {
+        if (_disposed)
+        {
+            return;
+        }
+
+        _disposed = true;
+
+        foreach (var img in _textureImageCache.Values)
+        {
+            img?.Dispose();
+        }
+
+        _textureImageCache.Clear();
+    }
+
     private static Vector4 HexToVector4(int hex)
         => new(
             ((hex >> 16) & 0xFF) / 255.0f,
@@ -101,7 +138,34 @@ public static class GltfConverter
             1.0f
         );
 
-    private static async Task<Vector4?> TryGetColorMultiplierAsync(string textureName, Biome biome, ResourcePackManager resourcePackManager)
+    private static bool TryGetBiomeOverride(string blockId, Biome biome, out Vector4 overrideColor)
+    {
+        if (biome.Name is "swamp")
+        {
+            overrideColor = HexToVector4(0x6A7039);
+            return true;
+        }
+
+        if (biome.Name.Contains("badlands", StringComparison.Ordinal) && (blockId.Contains("grass", StringComparison.Ordinal) || blockId.Contains("fern", StringComparison.Ordinal)))
+        {
+            overrideColor = HexToVector4(0x90814D);
+            return true;
+        }
+
+        overrideColor = Vector4.Zero;
+        return false;
+    }
+
+    private static VertexBuilder<VertexPositionNormal, VertexTexture1, VertexEmpty> CreateVertexBuilder(MeshVertex v)
+    {
+        var geometry = new VertexPositionNormal(v.Position, v.Normal);
+
+        var material = new VertexTexture1(v.UV);
+
+        return new VertexBuilder<VertexPositionNormal, VertexTexture1, VertexEmpty>(geometry, material);
+    }
+
+    private async Task<Vector4?> TryGetColorMultiplierAsync(string textureName, Biome biome)
     {
         if (!textureName.AsSpan().Contains(':'))
         {
@@ -123,28 +187,10 @@ public static class GltfConverter
             return color;
         }
 
-        return await GetColorFromTexture(colormapPath, biome, resourcePackManager);
+        return await GetColorFromTexture(colormapPath, biome);
     }
 
-    private static bool TryGetBiomeOverride(string blockId, Biome biome, out Vector4 overrideColor)
-    {
-        if (biome.Name is "swamp")
-        {
-            overrideColor = HexToVector4(0x6A7039);
-            return true;
-        }
-
-        if (biome.Name.Contains("badlands", StringComparison.Ordinal) && (blockId.Contains("grass", StringComparison.Ordinal) || blockId.Contains("fern", StringComparison.Ordinal)))
-        {
-            overrideColor = HexToVector4(0x90814D);
-            return true;
-        }
-
-        overrideColor = Vector4.Zero;
-        return false;
-    }
-
-    private static async Task<Vector4?> GetColorFromTexture(string path, Biome biome, ResourcePackManager resourcePackManager)
+    private async Task<Vector4?> GetColorFromTexture(string path, Biome biome)
     {
         var temp = float.Clamp(biome.Temperature, 0f, 1f);
         var humidity = float.Clamp(biome.Downfall, 0f, 1f) * temp;
@@ -154,7 +200,18 @@ public static class GltfConverter
 
         try
         {
-            var img = await resourcePackManager.GetTextureImageAsync(path);
+            if (!_textureImageCache.TryGetValue(path, out var img))
+            {
+                img = await _resourcePackManager.GetTextureImageAsync(path);
+                // add to cache even if null, so don't have to look up from _resourcePackManager again
+                _textureImageCache[path] = img;
+            }
+
+            if (img is null)
+            {
+                return null;
+            }
+
             var pixel = img[u, v];
             return new Vector4(pixel.R / 255f, pixel.G / 255f, pixel.B / 255f, 1.0f);
         }
@@ -165,13 +222,4 @@ public static class GltfConverter
     }
 
     private sealed record Biome(string Name, float Temperature, float Downfall);
-
-    private static VertexBuilder<VertexPositionNormal, VertexTexture1, VertexEmpty> CreateVertexBuilder(MeshVertex v)
-    {
-        var geometry = new VertexPositionNormal(v.Position, v.Normal);
-
-        var material = new VertexTexture1(v.UV);
-
-        return new VertexBuilder<VertexPositionNormal, VertexTexture1, VertexEmpty>(geometry, material);
-    }
 }

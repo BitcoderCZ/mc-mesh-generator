@@ -9,6 +9,8 @@ namespace BitcoderCZ.Minecraft.MeshGenerator.Models.ResourcePacks;
 #pragma warning disable CS1591 // Missing XML comment for publicly visible type or member
 public sealed class BlockModel
 {
+    public required BuiltInBlockModel BuiltInInfo { get; init; }
+
     public required IReadOnlyDictionary<string, DisplayPart> Display { get; init; }
 
     // texture variable to texture
@@ -17,8 +19,29 @@ public sealed class BlockModel
     public required ImmutableArray<BlockElement> Elements { get; init; }
 }
 
-// https://minecraft.wiki/w/Model#Block_models
 #pragma warning disable MA0048 // File name must match type name
+/// <summary>
+/// Determines whether a <see cref="BlockModel"/> uses one of the built in models.
+/// </summary>
+public enum BuiltInBlockModel
+{
+    /// <summary>
+    /// Does not use a built in model.
+    /// </summary>
+    None,
+
+    /// <summary>
+    /// Used for items, extruded texture.
+    /// </summary>
+    Generated,
+
+    /// <summary>
+    /// 
+    /// </summary>
+    Entity,
+}
+
+// https://minecraft.wiki/w/Model#Block_models
 public sealed class BlockModelJson
 {
     public string? Parent { get; init; }

@@ -1,4 +1,5 @@
 <Solution>
+  <Project Path="misc/BitcoderCZ.Minecraft.MeshGenerator.Testing/BitcoderCZ.Minecraft.MeshGenerator.Testing.csproj" />
   <Project Path="src/BitcoderCZ.Minecraft.MeshGenerator/BitcoderCZ.Minecraft.MeshGenerator.csproj" />
   <Project Path="src/BitcoderCZ.Minecraft.MeshGenerator.Gltf/BitcoderCZ.Minecraft.MeshGenerator.Gltf.csproj" />
 </Solution>

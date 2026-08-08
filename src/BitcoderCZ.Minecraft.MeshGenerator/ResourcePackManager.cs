@@ -1,5 +1,4 @@
 using System.Collections;
-using System.Collections.Concurrent;
 using System.Globalization;
 using BitcoderCZ.Minecraft.MeshGenerator.Models.ResourcePacks;
 using SixLabors.ImageSharp.PixelFormats;
@@ -9,13 +8,9 @@ namespace BitcoderCZ.Minecraft.MeshGenerator;
 /// <summary>
 /// Manages multiple <see cref="ResourcePack"/>s.
 /// </summary>
-public sealed class ResourcePackManager : IReadOnlyList<ResourcePack>, IDisposable
+public sealed class ResourcePackManager : IReadOnlyList<ResourcePack>
 {
     private readonly ResourcePack[] _packs;
-
-    private readonly ConcurrentDictionary<string, SixLabors.ImageSharp.Image<Rgba32>> _textureCache = new(StringComparer.Ordinal);
-
-    private readonly SemaphoreSlim _cacheLock = new(1, 1);
 
     private ResourcePackManager(ResourcePack[] packs)
     {
@@ -84,7 +79,7 @@ public sealed class ResourcePackManager : IReadOnlyList<ResourcePack>, IDisposab
             {
                 for (var j = i + 1; j < packs.Length; j++)
                 {
-                    if (packs[j].TryGetBlockModel(modelName, out var baseModel))
+                    if (packs[j].TryGetModel(modelName, out var baseModel))
                     {
                         return baseModel;
                     }
@@ -128,11 +123,11 @@ public sealed class ResourcePackManager : IReadOnlyList<ResourcePack>, IDisposab
     /// <param name="modelName">Name of the model.</param>
     /// <returns>The <see cref="BlockModel"/>.</returns>
     /// <exception cref="KeyNotFoundException">Thrown when the model does not exist in the resource pack.</exception>
-    public BlockModel GetBlockModel(string modelName)
+    public BlockModel GetModel(string modelName)
     {
         for (var i = 0; i < _packs.Length; i++)
         {
-            if (_packs[i].TryGetBlockModel(modelName, out var model))
+            if (_packs[i].TryGetModel(modelName, out var model))
             {
                 return model;
             }
@@ -167,37 +162,16 @@ public sealed class ResourcePackManager : IReadOnlyList<ResourcePack>, IDisposab
 
     internal async Task<SixLabors.ImageSharp.Image<Rgba32>> GetTextureImageAsync(string name, CancellationToken cancellationToken = default)
     {
-        if (_textureCache.TryGetValue(name, out var image))
+        for (var i = 0; i < _packs.Length; i++)
         {
-            return image;
-        }
-
-        await _cacheLock.WaitAsync(cancellationToken);
-
-        try
-        {
-            if (_textureCache.TryGetValue(name, out image))
+            var textureData = await _packs[i].TryGetTextureDataAsync(name, cancellationToken);
+            if (textureData is not null)
             {
-                return image;
-            }
-
-            for (var i = 0; i < _packs.Length; i++)
-            {
-                var textureData = await _packs[i].TryGetTextureDataAsync(name, cancellationToken);
-                if (textureData is not null)
+                using (var ms = new MemoryStream(textureData))
                 {
-                    using (var ms = new MemoryStream(textureData))
-                    {
-                        image = await SixLabors.ImageSharp.Image.LoadAsync<Rgba32>(ms, cancellationToken);
-                        _textureCache[name] = image;
-                        return image;
-                    }
+                    return await SixLabors.ImageSharp.Image.LoadAsync<Rgba32>(ms, cancellationToken);
                 }
             }
-        }
-        finally
-        {
-            _cacheLock.Release();
         }
 
         throw new FileNotFoundException($"Colormap texture '{name}' not found in any loaded resource pack.");
@@ -209,8 +183,4 @@ public sealed class ResourcePackManager : IReadOnlyList<ResourcePack>, IDisposab
 
     IEnumerator IEnumerable.GetEnumerator()
         => GetEnumerator();
-
-    /// <inheritdoc/>
-    public void Dispose()
-        => _cacheLock.Dispose();
 }

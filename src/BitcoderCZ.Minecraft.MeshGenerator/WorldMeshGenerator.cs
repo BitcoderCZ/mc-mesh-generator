@@ -16,8 +16,6 @@ namespace BitcoderCZ.Minecraft.MeshGenerator;
 /// </summary>
 public sealed class WorldMeshGenerator
 {
-    private const float BlockModelScale = 1f / 16f;
-
     private static readonly SearchValues<string> FullAndOpaqueBlocks = SearchValues.Create(
     [
         "glass",
@@ -309,16 +307,16 @@ public sealed class WorldMeshGenerator
     private void GenerateBlockMesh<TState>(VariantModel modelVariant, int3 blockPosition, MeshData.Builder mesh, ref TState state, GetBlockAtPos<TState> getBlockAtPos, Action<BlockState> disposeBlockState)
         where TState : struct
     {
-        var model = _resourcePack.GetBlockModel(modelVariant.Model);
+        var model = _resourcePack.GetModel(modelVariant.Model);
 
         var variantTransform = GeneratorUtils.CreateVariantTransform(modelVariant);
 
         foreach (var element in model.Elements)
         {
-            var from = element.From * BlockModelScale;
-            var to = element.To * BlockModelScale;
+            var from = element.From * GeneratorUtils.BlockModelScale;
+            var to = element.To * GeneratorUtils.BlockModelScale;
 
-            var elementTransform = GeneratorUtils.CreateElementTransform(element.Rotation, BlockModelScale);
+            var elementTransform = GeneratorUtils.CreateElementTransform(element.Rotation);
             var finalTransform = elementTransform * variantTransform;
 
             for (var i = 0; i < 6; i++)
@@ -363,7 +361,7 @@ public sealed class WorldMeshGenerator
 
                 var primitive = mesh.GetPrimitive(actualTexture);
 
-                GeneratorUtils.BuildFace(blockPosition, direction, from, to, face, finalTransform, modelVariant.UVLock, primitive, BlockModelScale);
+                GeneratorUtils.BuildFace(blockPosition, direction, from, to, face, finalTransform, modelVariant.UVLock, primitive);
             }
         }
     }
@@ -397,7 +395,7 @@ public sealed class WorldMeshGenerator
 
         foreach (var modelVariant in modelVariants)
         {
-            var model = _resourcePack.GetBlockModel(modelVariant.Model);
+            var model = _resourcePack.GetModel(modelVariant.Model);
             if (model is null || model.Elements.IsDefaultOrEmpty)
             {
                 continue;
@@ -407,10 +405,10 @@ public sealed class WorldMeshGenerator
 
             foreach (var element in model.Elements)
             {
-                var from = element.From * BlockModelScale;
-                var to = element.To * BlockModelScale;
+                var from = element.From * GeneratorUtils.BlockModelScale;
+                var to = element.To * GeneratorUtils.BlockModelScale;
 
-                var elementTransform = GeneratorUtils.CreateElementTransform(element.Rotation, BlockModelScale);
+                var elementTransform = GeneratorUtils.CreateElementTransform(element.Rotation);
                 var finalTransform = elementTransform * variantTransform;
 
                 CalculateTransformedAABB(from, to, finalTransform, out var min, out var max);

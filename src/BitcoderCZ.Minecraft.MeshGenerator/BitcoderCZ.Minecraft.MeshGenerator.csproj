@@ -20,6 +20,10 @@
     <PackageReference Include="BitcoderCZ.Maths" />
     <PackageReference Include="BitcoderCZ.Utils" />
     <PackageReference Include="Cyotek.Data.Nbt" />
+    <PackageReference Include="Microsoft.SourceLink.GitHub">
+      <IncludeAssets>runtime; build; native; contentfiles; analyzers; buildtransitive</IncludeAssets>
+      <PrivateAssets>all</PrivateAssets>
+    </PackageReference>
     <PackageReference Include="SixLabors.ImageSharp" />
   </ItemGroup>
 

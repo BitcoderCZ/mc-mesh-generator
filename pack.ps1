@@ -8,5 +8,5 @@ Param (
 
 Remove-Item "./nupkgs/*"
 dotnet clean
-dotnet build -c $Configuration -p:WarningLevel=0
-dotnet pack -c $Configuration -o nupkgs/ -p:WarningLevel=0
+dotnet build -c $Configuration -p:WarningLevel=0 -p:PACKAGE_PUBLISH=true
+dotnet pack -c $Configuration -o nupkgs/ -p:WarningLevel=0 -p:PACKAGE_PUBLISH=true

@@ -9,8 +9,6 @@ namespace BitcoderCZ.Minecraft.MeshGenerator;
 /// </summary>
 public sealed class BlockMeshGenerator
 {
-    private const float BlockModelScale = 1f / 16f;
-
     private readonly ResourcePackManager _resourcePack;
     private readonly Random _rng = new();
 
@@ -28,15 +26,15 @@ public sealed class BlockMeshGenerator
     /// </summary>
     /// <param name="blockId">The block id.</param>
     /// <returns>The generated mesh.</returns>
-    public MeshData Generate(string blockId)
-        => Generate(new BlockState(blockId));
+    public async Task<MeshData> GenerateAsync(string blockId)
+        => await GenerateAsync(new BlockState(blockId));
 
     /// <summary>
     /// Generates a mesh for the given block state.
     /// </summary>
     /// <param name="blockState">The block state.</param>
     /// <returns>The generated mesh.</returns>
-    public MeshData Generate(BlockState blockState)
+    public async Task<MeshData> GenerateAsync(BlockState blockState)
     {
         var mesh = new MeshData.Builder();
 
@@ -44,9 +42,9 @@ public sealed class BlockMeshGenerator
 
         var modelVariantsLength = _resourcePack.GetModelVariants(blockState, _rng, modelVariants);
 
-        foreach (var modelVariant in modelVariants.AsSpan(0, modelVariantsLength))
+        for (var i = 0; i < modelVariantsLength; i++)
         {
-            GenerateBlockMesh(modelVariant, mesh);
+            await GenerateBlockMesh(modelVariants[i], mesh);
         }
 
         ArrayPool<VariantModel>.Shared.Return(modelVariants);
@@ -59,11 +57,11 @@ public sealed class BlockMeshGenerator
     /// </summary>
     /// <param name="blockModel">The block model, e.g. minecraft:block/acacia_button.</param>
     /// <returns>The generated mesh.</returns>
-    public MeshData GenerateBlockModel(string blockModel)
+    public async Task<MeshData> GenerateBlockModelAsync(string blockModel)
     {
         var mesh = new MeshData.Builder();
 
-        GenerateBlockMesh(new VariantModel()
+        await GenerateBlockMesh(new VariantModel()
         {
             Model = blockModel,
         }, mesh);
@@ -71,18 +69,52 @@ public sealed class BlockMeshGenerator
         return mesh.Drain();
     }
 
-    private void GenerateBlockMesh(VariantModel modelVariant, MeshData.Builder mesh)
+    private async Task GenerateBlockMesh(VariantModel modelVariant, MeshData.Builder mesh)
     {
-        var model = _resourcePack.GetBlockModel(modelVariant.Model);
+        var model = _resourcePack.GetModel(modelVariant.Model);
+
+        switch (model.BuiltInInfo)
+        {
+            case BuiltInBlockModel.Generated:
+                if (model.Textures is not null)
+                {
+                    foreach (var (_, textureValue) in model.Textures)
+                    {
+                        var actualTexture = textureValue;
+                        while (actualTexture.StartsWith('#') && model.Textures is not null)
+                        {
+                            if (!model.Textures.TryGetValue(actualTexture[1..], out var resolvedTexture))
+                            {
+                                break;
+                            }
+
+                            actualTexture = resolvedTexture;
+                        }
+
+                        using var image = await _resourcePack.GetTextureImageAsync(actualTexture);
+                        if (image is null)
+                        {
+                            continue;
+                        }
+
+                        var primitive = mesh.GetPrimitive(actualTexture);
+                        GenerateGeneratedItemMesh(image, primitive);
+                    }
+                }
+
+                break;
+            default:
+                break;
+        }
 
         var variantTransform = GeneratorUtils.CreateVariantTransform(modelVariant);
 
         foreach (var element in model.Elements)
         {
-            var from = element.From * BlockModelScale;
-            var to = element.To * BlockModelScale;
+            var from = element.From * GeneratorUtils.BlockModelScale;
+            var to = element.To * GeneratorUtils.BlockModelScale;
 
-            var elementTransform = GeneratorUtils.CreateElementTransform(element.Rotation, BlockModelScale);
+            var elementTransform = GeneratorUtils.CreateElementTransform(element.Rotation);
             var finalTransform = elementTransform * variantTransform;
 
             for (var i = 0; i < 6; i++)
@@ -104,8 +136,158 @@ public sealed class BlockMeshGenerator
 
                 var primitive = mesh.GetPrimitive(actualTexture);
 
-                GeneratorUtils.BuildFace(Vector3.Zero, direction, from, to, face, finalTransform, modelVariant.UVLock, primitive, BlockModelScale);
+                GeneratorUtils.BuildFace(Vector3.Zero, direction, from, to, face, finalTransform, modelVariant.UVLock, primitive);
             }
         }
+    }
+
+    private static void GenerateGeneratedItemMesh(SixLabors.ImageSharp.Image<SixLabors.ImageSharp.PixelFormats.Rgba32> image, MeshPrimitive.Builder primitive)
+    {
+        var scale = GeneratorUtils.BlockModelScale;
+
+        var zFront = 8.5f * scale;
+        var zBack = 7.5f * scale;
+
+        var width = image.Width;
+        var height = image.Height;
+
+        AddQuad(
+            primitive,
+            new Vector3(0f, 0f, zFront),
+            new Vector3(16f * scale, 0f, zFront),
+            new Vector3(16f * scale, 16f * scale, zFront),
+            new Vector3(0f, 16f * scale, zFront),
+            new Vector3(0f, 0f, 1f),
+            new Vector2(0f, 1f),
+            new Vector2(1f, 1f),
+            new Vector2(1f, 0f),
+            new Vector2(0f, 0f)
+        );
+
+        AddQuad(
+            primitive,
+            new Vector3(16f * scale, 0f, zBack),
+            new Vector3(0f, 0f, zBack),
+            new Vector3(0f, 16f * scale, zBack),
+            new Vector3(16f * scale, 16f * scale, zBack),
+            new Vector3(0f, 0f, -1f),
+            new Vector2(1f, 1f),
+            new Vector2(0f, 1f),
+            new Vector2(0f, 0f),
+            new Vector2(1f, 0f)
+        );
+
+        bool IsOpaque(int px, int py)
+        {
+            return px >= 0 && px < width && py >= 0 && py < height && image[px, py].A > 0;
+        }
+
+        for (var y = 0; y < height; y++)
+        {
+            for (var x = 0; x < width; x++)
+            {
+                if (!IsOpaque(x, y))
+                {
+                    continue;
+                }
+
+                var xMin = x / (float)width * 16f * scale;
+                var xMax = (x + 1) / (float)width * 16f * scale;
+
+                var yMin = (height - 1 - y) / (float)height * 16f * scale;
+                var yMax = (height - y) / (float)height * 16f * scale;
+
+                var uMin = x / (float)width;
+                var uMax = (x + 1) / (float)width;
+                var vMin = y / (float)height;
+                var vMax = (y + 1) / (float)height;
+
+                if (!IsOpaque(x, y - 1))
+                {
+                    AddQuad(
+                        primitive,
+                        new Vector3(xMin, yMax, zFront),
+                        new Vector3(xMax, yMax, zFront),
+                        new Vector3(xMax, yMax, zBack),
+                        new Vector3(xMin, yMax, zBack),
+                        new Vector3(0f, 1f, 0f),
+                        new Vector2(uMin, vMax),
+                        new Vector2(uMax, vMax),
+                        new Vector2(uMax, vMin),
+                        new Vector2(uMin, vMin)
+                    );
+                }
+
+                if (!IsOpaque(x, y + 1))
+                {
+                    AddQuad(
+                        primitive,
+                        new Vector3(xMin, yMin, zBack),
+                        new Vector3(xMax, yMin, zBack),
+                        new Vector3(xMax, yMin, zFront),
+                        new Vector3(xMin, yMin, zFront),
+                        new Vector3(0f, -1f, 0f),
+                        new Vector2(uMin, vMax),
+                        new Vector2(uMax, vMax),
+                        new Vector2(uMax, vMin),
+                        new Vector2(uMin, vMin)
+                    );
+                }
+
+                if (!IsOpaque(x - 1, y))
+                {
+                    AddQuad(
+                        primitive,
+                        new Vector3(xMin, yMin, zBack),
+                        new Vector3(xMin, yMin, zFront),
+                        new Vector3(xMin, yMax, zFront),
+                        new Vector3(xMin, yMax, zBack),
+                        new Vector3(-1f, 0f, 0f),
+                        new Vector2(uMin, vMax),
+                        new Vector2(uMax, vMax),
+                        new Vector2(uMax, vMin),
+                        new Vector2(uMin, vMin)
+                    );
+                }
+
+                if (!IsOpaque(x + 1, y))
+                {
+                    AddQuad(
+                        primitive,
+                        new Vector3(xMax, yMin, zFront),
+                        new Vector3(xMax, yMin, zBack),
+                        new Vector3(xMax, yMax, zBack),
+                        new Vector3(xMax, yMax, zFront),
+                        new Vector3(1f, 0f, 0f),
+                        new Vector2(uMin, vMax),
+                        new Vector2(uMax, vMax),
+                        new Vector2(uMax, vMin),
+                        new Vector2(uMin, vMin)
+                    );
+                }
+            }
+        }
+    }
+
+    private static void AddQuad(
+        MeshPrimitive.Builder primitive,
+        Vector3 v0, Vector3 v1, Vector3 v2, Vector3 v3,
+        Vector3 normal,
+        Vector2 uv0, Vector2 uv1, Vector2 uv2, Vector2 uv3)
+    {
+        var baseIndex = primitive.VertexCount;
+
+        primitive.AddVertex(new MeshVertex(v0, normal, uv0));
+        primitive.AddVertex(new MeshVertex(v1, normal, uv1));
+        primitive.AddVertex(new MeshVertex(v2, normal, uv2));
+        primitive.AddVertex(new MeshVertex(v3, normal, uv3));
+
+        primitive.AddIndex(baseIndex + 0);
+        primitive.AddIndex(baseIndex + 1);
+        primitive.AddIndex(baseIndex + 2);
+
+        primitive.AddIndex(baseIndex + 0);
+        primitive.AddIndex(baseIndex + 2);
+        primitive.AddIndex(baseIndex + 3);
     }
 }

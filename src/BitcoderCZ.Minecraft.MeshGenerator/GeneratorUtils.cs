@@ -7,6 +7,8 @@ namespace BitcoderCZ.Minecraft.MeshGenerator;
 
 internal static class GeneratorUtils
 {
+    public const float BlockModelScale = 1f / 16f;
+
     public static Matrix4x4 CreateVariantTransform(VariantModel variant)
     {
         if (variant is { RotationX: 0, RotationY: 0, RotationZ: 0 })
@@ -21,7 +23,7 @@ internal static class GeneratorUtils
              * Matrix4x4.CreateTranslation(center);
     }
 
-    public static Matrix4x4 CreateElementTransform(BlockElementRotation? rot, float blockModelScale)
+    public static Matrix4x4 CreateElementTransform(BlockElementRotation? rot)
     {
         if (!rot.HasValue)
         {
@@ -29,7 +31,7 @@ internal static class GeneratorUtils
         }
 
         var r = rot.Value;
-        var origin = r.Origin * blockModelScale;
+        var origin = r.Origin * BlockModelScale;
 
         var radX = float.DegreesToRadians(r.X);
         var radY = float.DegreesToRadians(r.Y);
@@ -68,7 +70,7 @@ internal static class GeneratorUtils
             * Matrix4x4.CreateRotationZ(radZ);
     }
 
-    public static void BuildFace(Vector3 blockPosition, Direction dir, Vector3 from, Vector3 to, BlockFace face, Matrix4x4 transform, bool uvLock, MeshPrimitive.Builder primitive, float blockModelScale)
+    public static void BuildFace(Vector3 blockPosition, Direction dir, Vector3 from, Vector3 to, BlockFace face, Matrix4x4 transform, bool uvLock, MeshPrimitive.Builder primitive)
     {
         var startIndex = primitive.VertexCount;
 
@@ -76,7 +78,7 @@ internal static class GeneratorUtils
         GetFaceVertices(dir, from, to, corners, out var normal);
 
         Span<Vector2> uvs = stackalloc Vector2[4];
-        CalculateUVs(face.UV, face.Rotation, uvs, blockModelScale);
+        CalculateUVs(face.UV, face.Rotation, uvs);
 
         for (var i = 0; i < 4; i++)
         {
@@ -150,15 +152,15 @@ internal static class GeneratorUtils
         }
     }
 
-    private static void CalculateUVs(UVCoordinates uv, int rotation, Span<Vector2> result, float blockModelScale)
+    private static void CalculateUVs(UVCoordinates uv, int rotation, Span<Vector2> result)
     {
         Debug.Assert(result.Length is 4);
 
         // Scale 0-16 to 0-1.
-        var u0 = uv.Min.X * blockModelScale;
-        var v0 = uv.Min.Y * blockModelScale;
-        var u1 = uv.Max.X * blockModelScale;
-        var v1 = uv.Max.Y * blockModelScale;
+        var u0 = uv.Min.X * BlockModelScale;
+        var v0 = uv.Min.Y * BlockModelScale;
+        var u1 = uv.Max.X * BlockModelScale;
+        var v1 = uv.Max.Y * BlockModelScale;
 
         // top-left, bottom-left, bottom-right, top-right
         result[0] = new Vector2(u0, v0);
