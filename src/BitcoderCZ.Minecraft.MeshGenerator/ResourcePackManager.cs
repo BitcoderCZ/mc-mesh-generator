@@ -80,7 +80,16 @@ public sealed class ResourcePackManager : IDisposable
                 return null;
             }
 
-            packs[i] = await ResourcePack.LoadFromDirectoryAsync(packDef.Name, packDef.Directory, FallbackResolver, cancellationToken);
+            var packName = packDef.Name.Trim();
+
+            var index = packName.LastIndexOf(' ');
+
+            if (index != -1)
+            {
+                packName = packName[(index + 1)..];
+            }
+
+            packs[i] = await ResourcePack.LoadFromDirectoryAsync(packName, packDef.Directory, FallbackResolver, cancellationToken);
         }
 
         return new ResourcePackManager(packs);
