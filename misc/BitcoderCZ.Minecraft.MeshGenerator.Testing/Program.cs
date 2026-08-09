@@ -10,7 +10,7 @@ var chest = manager.GetModel("minecraft:item/light_gray_banner");
 Console.WriteLine(chest.BuiltInInfo);
 
 var bg = new BlockMeshGenerator(manager);
-var model = await bg.GenerateBlockModelAsync("minecraft:item/lime_banner");
+var model = await bg.GenerateBlockModelAsync("minecraft:item/lime_bed");
 var gltfConverter = new GltfConverter(manager);
 var gltf = await gltfConverter.ConvertAsync(model);
 gltf.SaveGLB("test.glb");
