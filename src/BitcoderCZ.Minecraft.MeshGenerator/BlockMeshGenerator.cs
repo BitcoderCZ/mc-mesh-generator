@@ -44,7 +44,7 @@ public sealed partial class BlockMeshGenerator
 
         for (var i = 0; i < modelVariantsLength; i++)
         {
-            await GenerateBlockMesh(modelVariants[i], mesh);
+            await GenerateBlockMesh(modelVariants[i], blockState, mesh);
         }
 
         ArrayPool<VariantModel>.Shared.Return(modelVariants);
@@ -56,20 +56,21 @@ public sealed partial class BlockMeshGenerator
     /// Generates a mesh for the given block model.
     /// </summary>
     /// <param name="blockModel">The block model, e.g. minecraft:block/acacia_button.</param>
+    /// <param name="blockState">An optional block state.</param>
     /// <returns>The generated mesh.</returns>
-    public async Task<MeshData> GenerateBlockModelAsync(string blockModel)
+    public async Task<MeshData> GenerateBlockModelAsync(string blockModel, BlockState? blockState = null)
     {
         var mesh = new MeshData.Builder();
 
         await GenerateBlockMesh(new VariantModel()
         {
             Model = blockModel,
-        }, mesh);
+        }, blockState, mesh);
 
         return mesh.Drain();
     }
 
-    private async Task GenerateBlockMesh(VariantModel modelVariant, MeshData.Builder mesh)
+    private async Task GenerateBlockMesh(VariantModel modelVariant, BlockState? blockState, MeshData.Builder mesh)
     {
         var model = _resourcePack.GetModel(modelVariant.Model);
 
@@ -120,6 +121,31 @@ public sealed partial class BlockMeshGenerator
                                 var color = GetBedColor(modelVariant.Model);
                                 var bedPrimitive = mesh.GetPrimitive($"minecraft:entity/bed/{color}");
                                 GenerateBedEntityMesh(bedPrimitive);
+                            }
+
+                            break;
+                        case string s when s.Contains("chest", StringComparison.Ordinal):
+                            {
+                                var chestType = "single";
+                                if (blockState is { } blockStateValue && blockStateValue.TryGetProperty("type", out var typeValue))
+                                {
+                                    chestType = typeValue;
+                                }
+
+                                var chestName = "normal";
+                                if (s.Contains("trapped", StringComparison.Ordinal))
+                                {
+                                    chestName = "trapped";
+                                }
+                                else if (s.Contains("ender", StringComparison.Ordinal))
+                                {
+                                    chestName = "ender";
+                                }
+
+                                var textureName = chestType == "single" ? chestName : $"{chestName}_{chestType}";
+                                var chestPrimitive = mesh.GetPrimitive($"minecraft:entity/chest/{textureName}");
+
+                                GenerateChestEntityMesh(chestPrimitive, chestType, GeneratorUtils.CreateVariantTransform(modelVariant));
                             }
 
                             break;

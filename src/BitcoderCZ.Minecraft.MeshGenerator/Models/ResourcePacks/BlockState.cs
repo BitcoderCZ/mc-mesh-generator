@@ -5,6 +5,7 @@ using System.Text.Json.Serialization;
 using MPSBuffer = BitcoderCZ.Buffers.ImmutableInlineArray<BitcoderCZ.Buffers.FixedArray1<string>, string>;
 using System.Diagnostics;
 using BitcoderCZ.Minecraft.MeshGenerator.JsonConverters;
+using System.Diagnostics.CodeAnalysis;
 
 namespace BitcoderCZ.Minecraft.MeshGenerator.Models.ResourcePacks;
 
@@ -102,6 +103,27 @@ public readonly struct BlockState : IEquatable<BlockState>
     /// <returns><see langword="true"/> if <paramref name="left"/> and <paramref name="right"/> are not equal; otherwise, <see langword="false"/>.</returns>
     public static bool operator !=(BlockState left, BlockState right)
         => !(left == right);
+
+    /// <summary>
+    /// Attempts to retreive a property by name.
+    /// </summary>
+    /// <param name="name">Name of the property.</param>
+    /// <param name="value">The property's value on success; otherwise, <see langword="null"/>.</param>
+    /// <returns><see langword="true"/> if a property with the name was founds; otherwise, <see langword="false"/>.</returns>
+    public bool TryGetProperty(string name, [MaybeNullWhen(false)] out string value)
+    {
+        foreach (var item in Properties)
+        {
+            if (item.Key == name)
+            {
+                value = item.Value;
+                return true;
+            }
+        }
+
+        value = null;
+        return false;
+    }
 
     /// <inheritdoc/>
     public bool Equals(BlockState other)
