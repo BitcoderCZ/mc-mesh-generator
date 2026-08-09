@@ -24,6 +24,9 @@ public sealed class MeshData
     /// <summary>
     /// Gets the primitives in the mesh, grouped by texture.
     /// </summary>
+    /// <remarks>
+    /// Optionally may contain hex color at the end for tint (e.g. minecraft:entity/banner_base#D83F36)
+    /// </remarks>
     public IReadOnlyDictionary<string, MeshPrimitive> Primitives { get; }
 
     /// <summary>

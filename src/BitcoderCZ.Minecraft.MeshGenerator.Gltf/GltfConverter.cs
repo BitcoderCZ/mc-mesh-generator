@@ -74,12 +74,12 @@ public sealed class GltfConverter : IDisposable
 
         foreach (var kvp in mesh.Primitives)
         {
-            var textureId = kvp.Key;
+            var (textureId, inlineColor) = ParseTextureKey(kvp.Key);
             var primitiveData = kvp.Value;
 
             var textureBytes = await _resourcePackManager.GetTextureDataAsync(textureId);
 
-            var colorMultiplier = await TryGetColorMultiplierAsync(textureId, biome);
+            var colorMultiplier = inlineColor ?? await TryGetColorMultiplierAsync(textureId, biome);
 
             var material = new MaterialBuilder(textureId)
                 .WithBaseColor(new SharpGLTF.Memory.MemoryImage(textureBytes), colorMultiplier)
@@ -128,6 +128,25 @@ public sealed class GltfConverter : IDisposable
         }
 
         _textureImageCache.Clear();
+    }
+
+    private static (string textureId, Vector4? color) ParseTextureKey(string key)
+    {
+        var separatorIndex = key.IndexOf('#');
+        if (separatorIndex < 0)
+        {
+            return (key, null);
+        }
+
+        var textureId = key[..separatorIndex];
+        var hexSpan = key.AsSpan(separatorIndex + 1);
+
+        if (int.TryParse(hexSpan, System.Globalization.NumberStyles.HexNumber, null, out var hex))
+        {
+            return (textureId, HexToVector4(hex));
+        }
+
+        return (textureId, null);
     }
 
     private static Vector4 HexToVector4(int hex)
