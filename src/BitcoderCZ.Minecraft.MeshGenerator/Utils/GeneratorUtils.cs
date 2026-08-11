@@ -3,7 +3,7 @@ using System.Numerics;
 using BitcoderCZ.Maths.Vectors;
 using BitcoderCZ.Minecraft.MeshGenerator.Models.ResourcePacks;
 
-namespace BitcoderCZ.Minecraft.MeshGenerator;
+namespace BitcoderCZ.Minecraft.MeshGenerator.Utils;
 
 internal static class GeneratorUtils
 {
