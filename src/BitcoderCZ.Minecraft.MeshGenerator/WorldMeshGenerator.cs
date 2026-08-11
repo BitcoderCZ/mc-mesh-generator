@@ -1,5 +1,6 @@
 using System.Buffers;
 using System.Diagnostics;
+using System.Globalization;
 using System.IO.Compression;
 using System.Numerics;
 using BitcoderCZ.Maths.Vectors;
@@ -86,6 +87,22 @@ public sealed class WorldMeshGenerator
         ProcessChunks(subChunkCache, mesh, worldOffset, processChunksProgress);
 
         return mesh.Drain();
+    }
+
+    /// <summary>
+    /// Generates mesh from a zip containing the world.
+    /// </summary>
+    /// <param name="path">Path to the zip file.</param>
+    /// <param name="worldOffset">Offset to apply to the mesh.</param>
+    /// <param name="progress">An optional <see cref="IProgress{ProgressReport}"/> to report progress to.</param>
+    /// <param name="cancellationToken">An optional <see cref="CancellationToken"/>.</param>
+    /// <returns>The generated mesh for the world.</returns>
+    public async Task<MeshData> GenerateFromZipFileAsync(string path, int3 worldOffset, IProgress<ProgressReport>? progress = null, CancellationToken cancellationToken = default)
+    {
+        using var fs = File.OpenRead(path);
+        using var zip = new ZipArchive(fs, ZipArchiveMode.Read);
+
+        return await GenerateFromZipAsync(zip, worldOffset, progress, cancellationToken);
     }
 
     /// <summary>
@@ -197,6 +214,28 @@ public sealed class WorldMeshGenerator
         }
     }
 
+    private static BlockState? GetBlockAtPosImpl(int3 queryWorldPos, ref GetBlockAtPosState state)
+    {
+        var rawBlockPos = queryWorldPos - state.Offset;
+
+        var targetSubChunkCoord = new int3(
+            (int)float.Floor((float)rawBlockPos.X / ChunkUtils.Width),
+            (int)float.Floor((float)rawBlockPos.Y / ChunkUtils.SubChunkSize),
+            (int)float.Floor((float)rawBlockPos.Z / ChunkUtils.Width)
+        );
+
+        if (!state.Cache.TryGetValue(targetSubChunkCoord, out var targetSubChunk))
+        {
+            return null;
+        }
+
+        var localPos = rawBlockPos - (targetSubChunkCoord * ChunkUtils.SubChunkSize);
+        var targetIndex = localPos.X + localPos.Z * ChunkUtils.Width + localPos.Y * ChunkUtils.Width * ChunkUtils.Width;
+        var targetBlockIndex = targetSubChunk.Blocks[targetIndex];
+
+        return ChunkUtils.TagToBlockStateVisibleFromPool((TagCompound)targetSubChunk.Palette.Value[targetBlockIndex]);
+    }
+
     private void ProcessCachedSubChunk(CachedSubChunk subChunk, Dictionary<int3, CachedSubChunk> cache, MeshData.Builder mesh, int3 offset)
     {
         var foundVisibleBlock = false;
@@ -222,6 +261,8 @@ public sealed class WorldMeshGenerator
 
         var state = new GetBlockAtPosState(cache, offset);
 
+        Action<BlockState> disposeBlockState = static blockState => ArrayPool<KeyValuePair<string, string>>.Shared.Return(blockState._properties);
+
         foreach (var blockIndex in subChunk.Blocks)
         {
             var paletteEntry = (TagCompound)subChunk.Palette.Value[blockIndex];
@@ -229,13 +270,15 @@ public sealed class WorldMeshGenerator
 
             if (!ChunkUtils.InvisibleBlocks.Contains(blockName))
             {
+                var currentWorldPos = chunkBlockPosition + blockPosition + offset;
+
                 if (blockName is "minecraft:water" or "minecraft:lava")
                 {
-                    // TODO:
+                    mesh.RegisterBlock(currentWorldPos);
+                    GenerateFluidMesh(blockName, paletteEntry, currentWorldPos, mesh, ref state, GetBlockAtPosImpl, disposeBlockState);
                     goto incrementPos;
                 }
 
-                var currentWorldPos = chunkBlockPosition + blockPosition + offset;
                 mesh.RegisterBlock(currentWorldPos);
 
                 var propertiesArrayLength = 0;
@@ -258,29 +301,7 @@ public sealed class WorldMeshGenerator
 
                 foreach (var modelVariant in modelVariants.AsSpan(0, modelVariantsLength))
                 {
-                    GenerateBlockMesh(modelVariant, currentWorldPos, mesh, ref state, static (queryWorldPos, ref state) =>
-                    {
-                        var rawBlockPos = queryWorldPos - state.Offset;
-
-                        var targetSubChunkCoord = new int3(
-                            (int)float.Floor((float)rawBlockPos.X / ChunkUtils.Width),
-                            (int)float.Floor((float)rawBlockPos.Y / ChunkUtils.SubChunkSize),
-                            (int)float.Floor((float)rawBlockPos.Z / ChunkUtils.Width)
-                        );
-
-                        if (!state.Cache.TryGetValue(targetSubChunkCoord, out var targetSubChunk))
-                        {
-                            return null;
-                        }
-
-                        var localPos = rawBlockPos - (targetSubChunkCoord * ChunkUtils.SubChunkSize);
-
-                        var targetIndex = localPos.X + localPos.Z * ChunkUtils.Width + localPos.Y * ChunkUtils.Width * ChunkUtils.Width;
-                        var targetBlockIndex = targetSubChunk.Blocks[targetIndex];
-
-                        return ChunkUtils.TagToBlockStateVisibleFromPool((TagCompound)targetSubChunk.Palette.Value[targetBlockIndex]);
-                    },
-                    blockState => ArrayPool<KeyValuePair<string, string>>.Shared.Return(blockState._properties));
+                    GenerateBlockMesh(modelVariant, currentWorldPos, mesh, ref state, GetBlockAtPosImpl, disposeBlockState);
                 }
             }
 
@@ -364,6 +385,147 @@ public sealed class WorldMeshGenerator
                 GeneratorUtils.BuildFace(blockPosition, direction, from, to, face, finalTransform, modelVariant.UVLock, primitive);
             }
         }
+    }
+
+    private void GenerateFluidMesh<TState>(
+         string blockName,
+         TagCompound paletteEntry,
+         int3 blockPosition,
+         MeshData.Builder mesh,
+         ref TState state,
+         GetBlockAtPos<TState> getBlockAtPos,
+         Action<BlockState> disposeBlockState)
+         where TState : struct
+    {
+        var isWater = blockName is "minecraft:water";
+        var textureName = isWater ? "minecraft:block/water_still" : "minecraft:block/lava_still";
+        var primitive = mesh.GetPrimitive(textureName);
+
+        // Calculate base height for the current block (fallback)
+        var level = 0;
+        if (paletteEntry.Value.TryGetValue("Properties", out var propsTag) && propsTag is TagCompound props)
+        {
+            if (props.Value.TryGetValue("level", out var levelTag) && levelTag is TagString levelStr)
+            {
+                _ = int.TryParse(levelStr.Value, CultureInfo.InvariantCulture, out level);
+            }
+        }
+
+        var baseHeight = 14f / 16f;
+        if (level >= 8)
+        {
+            baseHeight = 1f;
+        }
+        else if (level > 0)
+        {
+            baseHeight = Math.Max(0.1f, (14f - level * 1.5f) / 16f);
+        }
+
+        float GetFluidHeightForBlock(int3 pos, ref TState state)
+        {
+            var block = getBlockAtPos(pos, ref state);
+            if (block is null || block.Value.BlockId != blockName)
+            {
+                if (block is not null)
+                {
+                    disposeBlockState(block.Value);
+                }
+
+                return -1f;
+            }
+
+            var upBlock = getBlockAtPos(pos + new int3(0, 1, 0), ref state);
+            var hasFluidAbove = upBlock is not null && upBlock.Value.BlockId == blockName;
+            if (upBlock is not null)
+            {
+                disposeBlockState(upBlock.Value);
+            }
+
+            if (hasFluidAbove)
+            {
+                disposeBlockState(block.Value);
+                return 1f;
+            }
+
+            var blockLevel = GetLevelFromBlockState(block.Value);
+            disposeBlockState(block.Value);
+
+            if (blockLevel >= 8)
+            {
+                return 1f;
+            }
+
+            return Math.Max(0.1f, (14f - blockLevel * 1.5f) / 16f);
+        }
+
+        float GetCornerHeight(int dx, int dz, ref TState state)
+        {
+            var fluidCount = 0;
+            var heightSum = 0f;
+
+            for (var ox = dx - 1; ox <= dx; ox++)
+            {
+                for (var oz = dz - 1; oz <= dz; oz++)
+                {
+                    var checkPos = blockPosition + new int3(ox, 0, oz);
+                    var h = GetFluidHeightForBlock(checkPos, ref state);
+                    if (h >= 0f)
+                    {
+                        if (h == 1f)
+                        {
+                            return 1f;
+                        }
+
+                        heightSum += h;
+                        fluidCount++;
+                    }
+                }
+            }
+
+            return fluidCount == 0 ? baseHeight : heightSum / fluidCount;
+        }
+
+        var h00 = GetCornerHeight(0, 0, ref state);
+        var h10 = GetCornerHeight(1, 0, ref state);
+        var h01 = GetCornerHeight(0, 1, ref state);
+        var h11 = GetCornerHeight(1, 1, ref state);
+
+        for (var i = 0; i < 6; i++)
+        {
+            var dir = (Direction)i;
+            var neighborPos = blockPosition + GeneratorUtils.GetDirectionOffset(dir);
+            var neighbor = getBlockAtPos(neighborPos, ref state);
+
+            var cull = false;
+            if (neighbor is not null)
+            {
+                if (neighbor.Value.BlockId == blockName)
+                {
+                    cull = true;
+                }
+                else if (IsBlockFullAndOpaque(neighbor.Value, (Direction)((int)dir ^ 1)))
+                {
+                    cull = true;
+                }
+
+                disposeBlockState(neighbor.Value);
+            }
+
+            if (!cull)
+            {
+                GeneratorUtils.BuildFluidFace(blockPosition, dir, h00, h10, h01, h11, primitive);
+            }
+        }
+    }
+
+    private static int GetLevelFromBlockState(BlockState state)
+    {
+        if (state.TryGetProperty("level", out var levelString) && int.TryParse(levelString, CultureInfo.InvariantCulture, out var level))
+        {
+            return level;
+        }
+
+        return 0;
     }
 
     private bool IsBlockFullAndOpaque(BlockState blockState, Direction faceDirection)

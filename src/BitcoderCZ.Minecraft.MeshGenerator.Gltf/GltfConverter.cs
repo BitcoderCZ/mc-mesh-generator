@@ -84,7 +84,7 @@ public sealed class GltfConverter : IDisposable
             var material = new MaterialBuilder(textureId)
                 .WithBaseColor(new SharpGLTF.Memory.MemoryImage(textureBytes), colorMultiplier)
                 .WithDoubleSide(false)
-                .WithAlpha(AlphaMode.MASK) // todo: BLEND
+                .WithAlpha(IsTextureSemiTransparent(textureId) ? AlphaMode.BLEND : AlphaMode.MASK)
                 .WithMetallicRoughness(0, 1);
 
             var textureBuilder = material.GetChannel(KnownChannel.BaseColor).Texture;
@@ -149,6 +149,9 @@ public sealed class GltfConverter : IDisposable
         return (textureId, null);
     }
 
+    private static bool IsTextureSemiTransparent(string texture)
+        => texture is "minecraft:block/water_still" or "minecraft:block/water_flow" or "minecraft:block/ice" or "minecraft:block/frosted_ice_0" or "minecraft:block/frosted_ice_1" or "minecraft:block/frosted_ice_2" or "minecraft:block/frosted_ice_3" or "minecraft:block/slime_block" or "minecraft:block/honey_block_bottom" or "minecraft:block/honey_block_side" or "minecraft:block/honey_block_top" or "minecraft:block/nether_portal" || texture.Contains("_glass", StringComparison.Ordinal);
+
     private static Vector4 HexToVector4(int hex)
         => new(
             ((hex >> 16) & 0xFF) / 255.0f,
@@ -175,6 +178,21 @@ public sealed class GltfConverter : IDisposable
         return false;
     }
 
+    private static bool IsWaterTexture(string texture)
+        => texture is "minecraft:block/water_still" or "minecraft:block/water_flow";
+
+    private static Vector4 GetWaterColor(Biome biome) => biome.Name switch
+    {
+        "swamp" => HexToVector4(0x617B59),
+        "mangrove_swamp" => HexToVector4(0x3A7A56),
+        "warm_ocean" => HexToVector4(0x43D5EE),
+        "lukewarm_ocean" or "deep_lukewarm_ocean" => HexToVector4(0x45ADF2),
+        "cold_ocean" or "deep_cold_ocean" => HexToVector4(0x3D57D6),
+        "frozen_ocean" or "deep_frozen_ocean" or "frozen_river" => HexToVector4(0x3938C9),
+        _ when biome.Name.Contains("badlands", StringComparison.Ordinal) => HexToVector4(0x4E3853),
+        _ => HexToVector4(0x3F76E4),
+    };
+
     private static VertexBuilder<VertexPositionNormal, VertexTexture1, VertexEmpty> CreateVertexBuilder(MeshVertex v)
     {
         var geometry = new VertexPositionNormal(v.Position, v.Normal);
@@ -189,6 +207,11 @@ public sealed class GltfConverter : IDisposable
         if (!textureName.AsSpan().Contains(':'))
         {
             textureName = "minecraft:" + textureName;
+        }
+
+        if (IsWaterTexture(textureName))
+        {
+            return GetWaterColor(biome);
         }
 
         if (HardcodedBlockColors.TryGetValue(textureName, out var color))

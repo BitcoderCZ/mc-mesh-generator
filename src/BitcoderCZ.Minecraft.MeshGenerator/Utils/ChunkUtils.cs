@@ -90,12 +90,6 @@ internal static class ChunkUtils
             return null;
         }
 
-        if (blockName is "minecraft:water" or "minecraft:lava")
-        {
-            // TODO:
-            return null;
-        }
-
         var propertiesArray = ArrayPool<KeyValuePair<string, string>>.Shared.Rent(64);
         var propertiesArrayLength = 0;
         if (paletteEntry.Value.TryGetValue("Properties", out var propertiesTag))

@@ -97,6 +97,92 @@ internal static class GeneratorUtils
         primitive.AddIndex(startIndex + 0);
     }
 
+    public static void BuildFluidFace(int3 blockPosition, Direction dir, float h00, float h10, float h01, float h11, MeshPrimitive.Builder primitive)
+    {
+        var startIndex = primitive.VertexCount;
+        Span<Vector3> corners = stackalloc Vector3[4];
+        Vector3 normal;
+
+        switch (dir)
+        {
+            case Direction.Up:
+                normal = Vector3.UnitY;
+                corners[0] = new Vector3(0, h00, 0);
+                corners[1] = new Vector3(0, h01, 1);
+                corners[2] = new Vector3(1, h11, 1);
+                corners[3] = new Vector3(1, h10, 0);
+                break;
+            case Direction.Down:
+                normal = -Vector3.UnitY;
+                corners[0] = new Vector3(0, 0, 1);
+                corners[1] = new Vector3(0, 0, 0);
+                corners[2] = new Vector3(1, 0, 0);
+                corners[3] = new Vector3(1, 0, 1);
+                break;
+            case Direction.East:
+                normal = Vector3.UnitX;
+                corners[0] = new Vector3(1, h11, 1);
+                corners[1] = new Vector3(1, 0, 1);
+                corners[2] = new Vector3(1, 0, 0);
+                corners[3] = new Vector3(1, h10, 0);
+                break;
+            case Direction.West:
+                normal = -Vector3.UnitX;
+                corners[0] = new Vector3(0, h00, 0);
+                corners[1] = new Vector3(0, 0, 0);
+                corners[2] = new Vector3(0, 0, 1);
+                corners[3] = new Vector3(0, h01, 1);
+                break;
+            case Direction.North:
+                normal = -Vector3.UnitZ;
+                corners[0] = new Vector3(1, h10, 0);
+                corners[1] = new Vector3(1, 0, 0);
+                corners[2] = new Vector3(0, 0, 0);
+                corners[3] = new Vector3(0, h00, 0);
+                break;
+            case Direction.South:
+                normal = Vector3.UnitZ;
+                corners[0] = new Vector3(0, h01, 1);
+                corners[1] = new Vector3(0, 0, 1);
+                corners[2] = new Vector3(1, 0, 1);
+                corners[3] = new Vector3(1, h11, 1);
+                break;
+            default:
+                normal = Vector3.Zero;
+                break;
+        }
+
+        Span<Vector2> uvs = stackalloc Vector2[4];
+
+        if (dir is Direction.Up or Direction.Down)
+        {
+            uvs[0] = new Vector2(0, 0);
+            uvs[1] = new Vector2(0, 1);
+            uvs[2] = new Vector2(1, 1);
+            uvs[3] = new Vector2(1, 0);
+        }
+        else
+        {
+            uvs[0] = new Vector2(0, 1f - corners[0].Y);
+            uvs[1] = new Vector2(0, 1f - corners[1].Y);
+            uvs[2] = new Vector2(1, 1f - corners[2].Y);
+            uvs[3] = new Vector2(1, 1f - corners[3].Y);
+        }
+
+        var vecPos = new Vector3(blockPosition.X, blockPosition.Y, blockPosition.Z);
+        for (var i = 0; i < 4; i++)
+        {
+            primitive.AddVertex(new MeshVertex(vecPos + corners[i], normal, uvs[i]));
+        }
+
+        primitive.AddIndex(startIndex + 0);
+        primitive.AddIndex(startIndex + 1);
+        primitive.AddIndex(startIndex + 2);
+        primitive.AddIndex(startIndex + 2);
+        primitive.AddIndex(startIndex + 3);
+        primitive.AddIndex(startIndex + 0);
+    }
+
     private static void GetFaceVertices(Direction dir, Vector3 from, Vector3 to, Span<Vector3> corners, out Vector3 normal)
     {
         Debug.Assert(corners.Length is 4);
